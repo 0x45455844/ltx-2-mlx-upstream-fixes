@@ -8,6 +8,8 @@ LTX-only helpers (get_sigma_schedule, sigma_to_timestep) stay local.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import mlx.core as mx
 from mlx_arsenal.diffusion import dynamic_shift_schedule
 
@@ -40,6 +42,7 @@ __all__ = [
     "STAGE_2_SIGMAS",
     "get_sigma_schedule",
     "ltx2_schedule",
+    "shorten_schedule",
     "sigma_to_timestep",
 ]
 
@@ -115,6 +118,52 @@ def get_sigma_schedule(
     if num_steps is not None:
         sigmas = sigmas[:num_steps]
     return sigmas
+
+
+def shorten_schedule(
+    table: list[float],
+    steps: int | None,
+    *,
+    keep: Literal["start", "tail"],
+) -> list[float]:
+    """Return a ``steps``-step version of ``table`` that still ends at ``table[-1]``.
+
+    A plain slice (``table[: steps + 1]``) drops the terminal sigma, so the
+    denoising loop stops part way down the schedule and returns a latent that
+    still carries noise (``DISTILLED_SIGMAS[:4]`` ends at 0.98125). Every
+    shortened schedule built here keeps the table's last value (0.0).
+
+    Both modes keep the *tail* of the table, where the large sigma moves are:
+    the distilled table is front-loaded (five of its eight steps sit between
+    1.0 and 0.975), so keeping its head instead would spend the budget on
+    near-zero moves and then jump from ~0.98 to 0.0 in one step. Upstream has
+    no step-count parameter on these tables, so there is no reference to
+    mirror; the tail is the convention ``ic_lora --refine-steps`` already uses.
+
+    Args:
+        table: A full sigma table, ending at 0.0.
+        steps: Number of denoising steps wanted. ``None`` or 0, or a value
+            at or above the table's own step count, returns ``table`` unchanged.
+        keep: ``"start"`` pins ``table[0]`` and then takes the last ``steps``
+            sigmas (``steps=3`` on ``DISTILLED_SIGMAS`` gives
+            ``[1.0, 0.725, 0.421875, 0.0]``); use it for a stage that starts
+            from pure noise (``create_noised_state(sigma=1.0)``). ``"tail"``
+            keeps the last ``steps + 1`` sigmas, so the stage starts lower and
+            re-noises less; use it for a refinement stage, where the stage's
+            start sigma is ``sigmas[0]``.
+
+    Returns:
+        A list of ``steps + 1`` sigmas (or ``table`` itself).
+    """
+    if steps is not None and steps < 0:
+        raise ValueError(f"steps must be non-negative, got {steps}")
+    if keep not in ("start", "tail"):
+        raise ValueError(f"keep must be 'start' or 'tail', got {keep!r}")
+    if not steps or steps >= len(table) - 1:
+        return table
+    if keep == "start":
+        return [table[0], *table[-steps:]]
+    return table[len(table) - 1 - steps :]
 
 
 def sigma_to_timestep(sigma: float) -> mx.array:
