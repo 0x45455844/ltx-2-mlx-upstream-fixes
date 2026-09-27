@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import mlx.core as mx
+from mlx_arsenal.diffusion import TeaCacheController
 
 from ltx_core_mlx.components.guiders import (
     MultiModalGuiderParams,
@@ -68,6 +69,7 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
         cfg_scale: float = 3.0,
         stg_scale: float = 1.0,
         on_step: OnStepFn | None = None,
+        teacache_controller: TeaCacheController | None = None,
     ) -> object:
         """Run Stage 1 denoising with Euler + CFG. Override for HQ (res2s)."""
         # Video: full guidance (ref LTX_2_3_PARAMS)
@@ -95,6 +97,7 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
             audio_guider_factory=audio_factory,
             sigmas=sigmas,
             on_step=on_step,
+            teacache=teacache_controller,
         )
 
     def generate_and_save(
@@ -117,6 +120,8 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
         audio_start_time: float = 0.0,
         audio_max_duration: float | None = None,
         negative_prompt: str | None = None,
+        enable_teacache: bool = False,
+        teacache_thresh: float | None = None,
     ) -> str:
         """Generate video from audio and save to file.
 
@@ -142,12 +147,19 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
             negative_prompt: Negative prompt for CFG. ``None`` (default) uses
                 ``DEFAULT_NEGATIVE_PROMPT``; any string (including ``""``) is
                 encoded verbatim.
+            enable_teacache: When True, run stage 1 with a TeaCacheController
+                built from the Euler coefficients calibrated for
+                ``--two-stage`` (opt-in, default False). Raises on LTX-2.5 packs.
+            teacache_thresh: Optional override for the preset's default
+                ``rel_l1_thresh``. Higher = more skipping = faster but
+                lossier. Ignored when ``enable_teacache=False``.
 
         Returns:
             Path to the output video file.
         """
         if audio_path is None:
             raise ValueError("audio_path is required for A2VidPipelineTwoStage")
+        self._check_teacache_supported(enable_teacache)
 
         if audio_max_duration is None:
             audio_max_duration = num_frames / frame_rate
@@ -260,6 +272,8 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
         sigmas_1 = ltx2_schedule(stage1_steps, num_tokens=num_tokens)
         x0_model = X0Model(self.dit)
 
+        teacache_controller = self._make_stage1_teacache(enable_teacache, stage1_steps, teacache_thresh)
+
         output_1 = self._denoise_stage1(
             x0_model=x0_model,
             video_state=video_state_1,
@@ -272,6 +286,7 @@ class A2VidPipelineTwoStage(TI2VidTwoStagesPipeline):
             cfg_scale=cfg_scale,
             stg_scale=stg_scale,
             on_step=self._stepwise_hook(F, H_half, W_half, stage=1),
+            teacache_controller=teacache_controller,
         )
         if self.low_memory:
             aggressive_cleanup()

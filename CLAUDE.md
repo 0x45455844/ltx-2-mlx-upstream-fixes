@@ -567,7 +567,7 @@ ltx-2-mlx a2v \
   --audio music.wav --two-stages-hq -o output.mp4
 ```
 
-Flags: `--audio` (required), `--frame-rate` (required, mirrors upstream `frame_rate=`), `--image` (optional I2V), `--two-stages-hq` (res_2s), `--cfg-scale`, `--stg-scale`, `--stage1-steps` (default 30 standard, 15 HQ).
+Flags: `--audio` (required), `--frame-rate` (required, mirrors upstream `frame_rate=`), `--image` (optional I2V), `--two-stages-hq` (res_2s), `--cfg-scale`, `--stg-scale`, `--stage1-steps` (default 30 standard, 15 HQ), `--enable-teacache` / `--teacache-thresh` (LTX-2.3 packs).
 
 ### Retake / Extend Example
 
@@ -699,7 +699,7 @@ pipeline.generate_and_save(
 )
 ```
 
-Equivalent CLI flag (works on both `--two-stage` and `--two-stages-hq`):
+Equivalent CLI flag (works on `--two-stage`, `--two-stages-hq` and `a2v`, whose stage 1 is the same Euler + CFG loop and reuses the Euler coefficients via `TI2VidTwoStagesPipeline._make_stage1_teacache`; ~1.30× at 30 steps on a2v, where the default `stg_scale=1.0` also caches the STG pass; refused on LTX-2.5 packs):
 
 ```bash
 ltx-2-mlx generate --prompt "..." --two-stage -f 97 --enable-teacache -o out.mp4
@@ -734,6 +734,8 @@ on `guided_denoise_loop`) produce ~0% skip on `res2s_denoise_loop` and
 vice versa. Use `scripts/calibrate_teacache.py --two-stages-hq` to recalibrate
 res_2s, and edit `LTX2_HQ_TEACACHE_COEFFICIENTS` /
 `LTX2_HQ_TEACACHE_THRESH` in `ti2vid_two_stages_hq.py`.
+
+**Same seed, different sample.** TeaCache skips steps early in stage 1, where the layout is decided, so a TeaCache render is **not** a faster copy of the plain render at the same seed. On unanchored T2V it comes out as a different scene: different subject, outfit and framing (2.3 q8, 384×576×25, seed 5, default thresh: SSIM 0.70 `--two-stage`, 0.73 `--two-stages-hq`). Anchors limit the drift: `keyframe` keeps both anchors and diverges in between (SSIM 0.74). A tight a2v close-up keeps the same face and framing (SSIM 0.89), and its lip-sync follows the speech/silence pattern exactly like the plain render. A wide a2v shot changes composition entirely. Each render is clean on its own. Don't use TeaCache to preview a seed you intend to finish without it.
 
 **Tuning**: thresh 0.5 is the conservative default. Push higher for more skip / more speed, with quality risk:
 - thresh 1.0 → ~55% skip, ~2× speedup expected
