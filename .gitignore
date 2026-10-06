@@ -28,6 +28,8 @@ env/
 .coverage
 htmlcov/
 *.mp4
+# Tiny test clips used by the parity tests are versioned.
+!tests/fixtures/*.mp4
 *.mov
 *.avi
 *.wav

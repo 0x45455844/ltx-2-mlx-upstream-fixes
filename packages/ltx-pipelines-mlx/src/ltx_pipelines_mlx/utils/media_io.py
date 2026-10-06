@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+from collections.abc import Iterable, Iterator
 from io import BytesIO
 from pathlib import Path
 
@@ -35,7 +36,7 @@ import mlx.core as mx
 import numpy as np
 from PIL import ExifTags, Image, ImageCms, UnidentifiedImageError
 
-from ltx_core_mlx.utils.ffmpeg import find_ffmpeg
+from ltx_core_mlx.utils.ffmpeg import find_ffmpeg, probe_video_info
 
 # Re-exported for upstream-iso import paths. ``DEFAULT_IMAGE_CRF`` is the CRF of the
 # pre-2.4 model generations (``LTX_2_4_IMAGE_CRF`` from 2.4 on); the value a run uses
@@ -374,15 +375,90 @@ def load_image_and_preprocess(
     return tensor.astype(mx.bfloat16)
 
 
+def decode_video_by_frame(
+    path: str | Path,
+    starting_frame: int = 0,
+    frame_cap: int | None = None,
+) -> Iterator[np.ndarray]:
+    """Decode a video by sequential frame index, at its native size.
+
+    Mirrors upstream ``decode_video_by_frame`` (PyAV): frames come out in
+    decode order, the first ``starting_frame`` are skipped, at most
+    ``frame_cap`` are yielded, and nothing is resized or rotated (PyAV does not
+    apply the display-matrix rotation, hence ``-noautorotate``). The YUV→RGB
+    conversion is bilinear, like PyAV's ``to_rgb()``.
+
+    Args:
+        path: Path to the video file.
+        starting_frame: Number of leading frames to skip.
+        frame_cap: Maximum number of frames to yield (``None`` = all).
+
+    Yields:
+        ``(H, W, 3)`` uint8 RGB frames.
+
+    Raises:
+        RuntimeError: If ffmpeg cannot decode the file.
+    """
+    info = probe_video_info(str(path))
+    frame_bytes = info.width * info.height * 3
+    cmd = [find_ffmpeg(), "-v", "error", "-noautorotate", "-i", str(path)]
+    if starting_frame > 0:
+        cmd += ["-vf", f"select=gte(n\\,{starting_frame})"]
+    if frame_cap is not None:
+        cmd += ["-frames:v", str(frame_cap)]
+    cmd += ["-fps_mode", "passthrough", "-sws_flags", "bilinear", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None
+    try:
+        while True:
+            buf = proc.stdout.read(frame_bytes)
+            if len(buf) < frame_bytes:
+                break
+            yield np.frombuffer(buf, dtype=np.uint8).reshape(info.height, info.width, 3)
+    finally:
+        proc.stdout.close()
+        stderr = proc.stderr.read() if proc.stderr is not None else b""
+        returncode = proc.wait()
+    if returncode != 0:
+        raise RuntimeError(f"ffmpeg failed to decode {path}: {stderr.decode(errors='ignore')}")
+
+
+def video_preprocess(frames: Iterable[np.ndarray], height: int, width: int) -> mx.array:
+    """Resize, center crop and normalize video frames for conditioning.
+
+    Mirrors upstream ``video_preprocess``: every frame goes through
+    :func:`resize_and_center_crop` (bilinear on floats, aspect-preserving fill)
+    and ``x / 127.5 - 1``.
+
+    Args:
+        frames: ``(H, W, 3)`` uint8 RGB frames, e.g. from :func:`decode_video_by_frame`.
+        height: Target height in pixels.
+        width: Target width in pixels.
+
+    Returns:
+        ``mx.array`` of shape ``(1, 3, F, height, width)`` in ``[-1, 1]``, bfloat16.
+
+    Raises:
+        ValueError: If ``frames`` is empty.
+    """
+    processed = [resize_and_center_crop(frame, height, width) / np.float32(127.5) - np.float32(1.0) for frame in frames]
+    if not processed:
+        raise ValueError("video_preprocess received an empty frame generator; no frames were decoded from the source.")
+    video = np.stack(processed)  # (F, H, W, 3)
+    return mx.array(video).transpose(3, 0, 1, 2)[None].astype(mx.bfloat16)
+
+
 __all__ = [
     "DEFAULT_IMAGE_CRF",
     "LTX_2_4_IMAGE_CRF",
     "decode_image",
     "decode_single_frame",
+    "decode_video_by_frame",
     "encode_single_frame",
     "from_vae_range",
     "load_image_and_preprocess",
     "preprocess",
     "resize_and_center_crop",
     "to_vae_range",
+    "video_preprocess",
 ]
