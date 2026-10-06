@@ -10,6 +10,13 @@ version: breaking changes bump `y`, additive changes bump `z`. See
 [`docs/PIPELINE_MATURITY.md`](docs/PIPELINE_MATURITY.md) for per-pipeline
 stability guarantees.
 
+## [0.16.2](https://github.com/dgrauet/ltx-2-mlx/compare/v0.16.1...v0.16.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* center-crop control videos like upstream video_preprocess ([#198](https://github.com/dgrauet/ltx-2-mlx/issues/198)) ([8605f32](https://github.com/dgrauet/ltx-2-mlx/commit/8605f326edb736e50922f5fc40c01778e8a6d17a)), closes [#194](https://github.com/dgrauet/ltx-2-mlx/issues/194)
+
 ## [0.16.1](https://github.com/dgrauet/ltx-2-mlx/compare/v0.16.0...v0.16.1) (2026-10-06)
 
 
